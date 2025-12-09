@@ -1,0 +1,13 @@
+# Visual Studio - Archivos temporales (IMPORTANTE para tu error)
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# Archivos de compilación (Binarios que no deben subirse)
+[Bb]in/
+[Oo]bj/
+
+# Otros archivos generados por el sistema
+.DS_Store
+Thumbs.db

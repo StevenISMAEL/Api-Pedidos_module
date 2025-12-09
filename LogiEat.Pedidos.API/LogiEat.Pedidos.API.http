@@ -1,0 +1,6 @@
+@LogiEat.Pedidos.API_HostAddress = http://localhost:5030
+
+GET {{LogiEat.Pedidos.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
