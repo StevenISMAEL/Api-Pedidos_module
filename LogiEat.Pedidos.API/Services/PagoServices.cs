@@ -31,11 +31,13 @@ namespace LogiEat.Pedidos.API.Services
             if (!await _context.EstadosPago.AnyAsync(e => e.Id == pago.EstadoPagoId))
                 throw new Exception($"EstadoPagoId {pago.EstadoPagoId} no existe.");
 
-            _httpClient.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            _
 
             // Validación HTTP de PedidoId
             var baseUrl = _config["PedidosService:BaseUrl"];
+
+            httpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
             var pedidoResponse = await _httpClient.GetAsync($"{baseUrl}/api/pedidos/{pago.PedidoId}");
 

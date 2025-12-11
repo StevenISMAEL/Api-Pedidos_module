@@ -25,8 +25,10 @@ builder.Services.AddDbContext<PedidosDbContext>(options =>
 
 // --- �ESTA ES LA L�NEA QUE FALTABA! ---
 // Registra el servicio para que IHttpClientFactory funcione en el controlador
-builder.Services.AddHttpClient();
+//builder.Services.AddHttpClient();
 // ---------------------------------------
+// ✅ Registrar servicios de Pagos
+builder.Services.AddHttpClient<IPagoService, PagoServices>();
 
 // 2. Configurar JWT (Validación)
 // Esta API no CREA tokens, solo los LEE.
@@ -56,8 +58,7 @@ builder.Services.AddControllers()
 
 
 
-// ✅ Registrar servicios de Pagos
-builder.Services.AddHttpClient<IPagoService, PagoServices>();
+
 
 
 builder.Services.AddEndpointsApiExplorer();
