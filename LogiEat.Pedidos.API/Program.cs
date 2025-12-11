@@ -2,6 +2,7 @@
 using LogiEat.Pedidos.API.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
@@ -11,8 +12,17 @@ using System.Text.Json.Serialization;
 var builder = WebApplication.CreateBuilder(args);
 
 // 1. Base de Datos
+/*builder.Services.AddDbContext<PedidosDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));*/
+
+
 builder.Services.AddDbContext<PedidosDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        sqlOptions => sqlOptions.EnableRetryOnFailure()
+    ));
+
+
 // --- �ESTA ES LA L�NEA QUE FALTABA! ---
 // Registra el servicio para que IHttpClientFactory funcione en el controlador
 builder.Services.AddHttpClient();
