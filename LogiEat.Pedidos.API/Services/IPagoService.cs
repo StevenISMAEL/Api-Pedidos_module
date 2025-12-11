@@ -8,7 +8,7 @@ namespace LogiEat.Pedidos.API.Services
         Task<IEnumerable<PagoDto>> ObtenerPagosAsync();
 
         Task<Pago?> ObtenerPagoPorIdAsync(int id);
-        Task<Pago> CrearPagoAsync(Pago pago);
+        Task<Pago> CrearPagoAsync(Pago pago, string token);
         Task<bool> ActualizarPagoAsync(Pago pago);
         Task<bool> EliminarPagoAsync(int id);
 

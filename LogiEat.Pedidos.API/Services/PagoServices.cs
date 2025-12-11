@@ -10,14 +10,17 @@ namespace LogiEat.Pedidos.API.Services
     {
         private readonly PedidosDbContext _context;
         private readonly HttpClient _httpClient;
+        private readonly IConfiguration _config;
 
-        public PagoServices(PedidosDbContext context, HttpClient httpClient)
+        public PagoServices(PedidosDbContext context, HttpClient httpClient, IConfiguration config)
         {
             _context = context;
             _httpClient = httpClient;
+            _config = config;
         }
 
-        public async Task<Pago> CrearPagoAsync(Pago pago)
+
+        public async Task<Pago> CrearPagoAsync(Pago pago, string token)
         {
             if (pago.Monto <= 0)
                 throw new Exception("El monto debe ser mayor a 0.");
@@ -28,8 +31,13 @@ namespace LogiEat.Pedidos.API.Services
             if (!await _context.EstadosPago.AnyAsync(e => e.Id == pago.EstadoPagoId))
                 throw new Exception($"EstadoPagoId {pago.EstadoPagoId} no existe.");
 
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
             // Validación HTTP de PedidoId
-            var pedidoResponse = await _httpClient.GetAsync($"https://pedidos-api-logieat-hndadee6fcbda0d2.canadacentral-01.azurewebsites.net/api/pedidos/{pago.PedidoId}");
+            var baseUrl = _config["PedidosService:BaseUrl"];
+
+            var pedidoResponse = await _httpClient.GetAsync($"{baseUrl}/api/pedidos/{pago.PedidoId}");
 
             if (!pedidoResponse.IsSuccessStatusCode)
                 throw new Exception($"PedidoId {pago.PedidoId} no existe en el microservicio de Pedidos.");

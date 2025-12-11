@@ -23,6 +23,7 @@ namespace LogiEat.Pedidos.API.Data
         public DbSet<DetallesProducto> DetallesProductos { get; set; }
         public DbSet<Empresa> Empresas { get; set; }
 
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
