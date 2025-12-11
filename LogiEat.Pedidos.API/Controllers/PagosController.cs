@@ -49,7 +49,8 @@ namespace LogiEat.Pedidos.API.Controllers
 
             try
             {
-                var nuevoPago = await _pagoService.CrearPagoAsync(pago);
+                var token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+                var nuevoPago = await _pagoService.CrearPagoAsync(pago, token);
                 return CreatedAtAction(nameof(GetPago), new { id = nuevoPago.Id }, nuevoPago);
             }
             catch (Exception ex)
