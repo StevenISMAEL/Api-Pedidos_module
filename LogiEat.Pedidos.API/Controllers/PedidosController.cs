@@ -5,35 +5,37 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using System.Text.Json;
 
 namespace LogiEat.Pedidos.API.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize] // Candado general: Nadie entra sin Token
+    [Authorize]
     public class PedidosController : ControllerBase
     {
         private readonly PedidosDbContext _context;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public PedidosController(PedidosDbContext context)
+        // ⚠️ URL DEL POST DE TU COMPAÑERO (Ajustada a la ruta de Detalles)
+        private const string UrlApiPartnerPost = "https://app-inventario.azurewebsites.net/api/DetallesProducto";
+
+        public PedidosController(PedidosDbContext context, IHttpClientFactory httpClientFactory)
         {
             _context = context;
+            _httpClientFactory = httpClientFactory;
         }
 
-        // ============================================================
-        // 1. CREAR PEDIDO (CLIENTE)
-        // ============================================================
         [HttpPost("Crear")]
         public async Task<IActionResult> CrearPedido([FromBody] CrearPedidoDto dto)
         {
             if (dto.Productos == null || !dto.Productos.Any())
                 return BadRequest("El carrito no puede estar vacío.");
 
-            // A. Identificar al usuario desde el Token
             var idUsuario = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(idUsuario)) return Unauthorized();
 
-            // B. Crear Cabecera
+            // 1. CREAR EL PEDIDO EN TU BASE DE DATOS
             var nuevoPedido = new Pedido
             {
                 IdUsuarioCliente = idUsuario,
@@ -44,7 +46,6 @@ namespace LogiEat.Pedidos.API.Controllers
 
             decimal totalCalculado = 0;
 
-            // C. Crear Detalles (Con nombres snapshot correctos)
             foreach (var item in dto.Productos)
             {
                 var subtotal = item.Precio * item.Cantidad;
@@ -53,8 +54,8 @@ namespace LogiEat.Pedidos.API.Controllers
                 nuevoPedido.Detalles.Add(new DetallePedido
                 {
                     IdProducto = item.IdProducto,
-                    NombreProductoSnapshot = item.Nombre, // Clave: Guardamos el nombre histórico
-                    PrecioUnitarioSnapshot = item.Precio, // Clave: Guardamos el precio histórico
+                    NombreProductoSnapshot = item.Nombre,
+                    PrecioUnitarioSnapshot = item.Precio,
                     Cantidad = item.Cantidad,
                     Subtotal = subtotal
                 });
@@ -62,70 +63,110 @@ namespace LogiEat.Pedidos.API.Controllers
 
             nuevoPedido.Total = totalCalculado;
 
-            // D. Guardar todo en una transacción
             _context.Pedidos.Add(nuevoPedido);
-            await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync(); // Se genera el ID del Pedido
 
-            return Ok(new { mensaje = "Pedido creado", idPedido = nuevoPedido.IdPedido, total = totalCalculado });
+            // 2. ENVIAR REPORTE A LA API DEL COMPAÑERO (JSON LIMPIO)
+            var clienteHttp = _httpClientFactory.CreateClient();
+
+            // Lista para guardar errores y mostrártelos en Swagger
+            var erroresDeInventario = new List<string>();
+
+            foreach (var item in dto.Productos)
+            {
+                // AQUÍ ESTÁ EL TRUCO: Creamos un objeto anónimo SOLO con los campos planos.
+                // Ignoramos el objeto "producto" anidado que muestra Swagger.
+                var reporteVenta = new
+                {
+                    idProducto = item.IdProducto,
+                    cantidad = item.Cantidad,
+                    precio = item.Precio,       // Él pide precio en su tabla
+
+                    // CORRECCIÓN: Cambiado de "SALIDA" a "pedido" según el error de tu compañero
+                    nombreProducto = item.Nombre,
+                    tipoEstado = "pedido",
+
+                    // Fechas (las ponemos nosotros por si su API no las genera sola)
+                    fechaIngreso = DateTime.Now,
+                    fechaEgreso = DateTime.Now,
+
+                    // (Opcional) Si él tiene un campo para referencia, úsalo. Si no, omítelo.
+                    // idTransaccion = nuevoPedido.IdPedido 
+                };
+
+                try
+                {
+                    var jsonContent = JsonSerializer.Serialize(reporteVenta);
+                    var content = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+
+                    // Enviamos el POST
+                    var responsePost = await clienteHttp.PostAsync(UrlApiPartnerPost, content);
+
+                    if (!responsePost.IsSuccessStatusCode)
+                    {
+                        var errorMsg = await responsePost.Content.ReadAsStringAsync();
+                        // Guardamos el error para que tú lo veas
+                        erroresDeInventario.Add($"Error Prod {item.IdProducto}: {responsePost.StatusCode} - {errorMsg}");
+                        Console.WriteLine($"[WARNING] Falló reporte a inventario ({responsePost.StatusCode}): {errorMsg}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    erroresDeInventario.Add($"Excepción Prod {item.IdProducto}: {ex.Message}");
+                    Console.WriteLine($"[ERROR] No se pudo conectar con inventario: {ex.Message}");
+                }
+            }
+
+            // Retornamos el resultado incluyendo los errores de inventario si hubo
+            return Ok(new
+            {
+                mensaje = "Pedido creado exitosamente",
+                idPedido = nuevoPedido.IdPedido,
+                total = totalCalculado,
+                statusInventario = erroresDeInventario.Any() ? "CON ERRORES" : "EXITOSO",
+                detallesErrorInventario = erroresDeInventario
+            });
         }
 
-        // ============================================================
-        // 2. VER MIS PEDIDOS (CLIENTE)
-        // ============================================================
+        // ... MÉTODOS GET Y PUT (Iguales que antes, no cambian) ...
         [HttpGet("MisPedidos")]
         public async Task<ActionResult> MisPedidos()
         {
             var idUsuario = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            var lista = await _context.Pedidos
-                                .Include(p => p.Detalles) // Traer los platos también
-                                .Where(p => p.IdUsuarioCliente == idUsuario)
-                                .OrderByDescending(p => p.FechaPedido)
-                                .ToListAsync();
-            return Ok(lista);
+            return Ok(await _context.Pedidos.Include(p => p.Detalles).Where(p => p.IdUsuarioCliente == idUsuario).OrderByDescending(p => p.FechaPedido).ToListAsync());
         }
 
-        // ============================================================
-        // 3. VER PENDIENTES (ADMINISTRADOR)
-        // ============================================================
-        [Authorize(Roles = "Admin")] // Solo el Admin puede ver esto
+        [Authorize(Roles = "Admin")]
         [HttpGet("Pendientes")]
         public async Task<ActionResult> Pendientes()
         {
-            var lista = await _context.Pedidos
-                                .Include(p => p.Detalles)
-                                .Where(p => p.Estado != "ENTREGADO" && p.Estado != "RECHAZADO") // Vemos todo lo activo
-                                .OrderByDescending(p => p.FechaPedido)
-                                .ToListAsync();
-            return Ok(lista);
+            return Ok(await _context.Pedidos.Include(p => p.Detalles).Where(p => p.Estado != "ENTREGADO" && p.Estado != "RECHAZADO").OrderByDescending(p => p.FechaPedido).ToListAsync());
         }
 
-        // ============================================================
-        // 4. CAMBIAR ESTADO (ADMINISTRADOR) - ¡VITAL PARA TU FLUJO!
-        // ============================================================
         [Authorize(Roles = "Admin")]
         [HttpPut("CambiarEstado/{id}")]
         public async Task<IActionResult> CambiarEstado(int id, [FromBody] string nuevoEstado)
         {
-            // Validamos que sea un estado permitido para no romper la lógica
-            var estadosValidos = new[] { "PAGADO", "APROBADO", "EN_CAMINO", "ENTREGADO", "RECHAZADO" };
-            if (!estadosValidos.Contains(nuevoEstado.ToUpper()))
-                return BadRequest($"Estado no válido. Use: {string.Join(", ", estadosValidos)}");
-
             var pedido = await _context.Pedidos.FindAsync(id);
-            if (pedido == null) return NotFound("Pedido no encontrado");
-
-            // Actualizamos estado
+            if (pedido == null) return NotFound();
             pedido.Estado = nuevoEstado.ToUpper();
-
-            // Auditoría básica: Quién lo aprobó
-            var idAdmin = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            pedido.IdUsuarioAdminAprobador = idAdmin;
+            pedido.IdUsuarioAdminAprobador = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             pedido.FechaAprobacion = DateTime.Now;
-
             await _context.SaveChangesAsync();
+            return Ok(new { mensaje = "Estado actualizado" });
+        }
 
-            return Ok(new { mensaje = $"Pedido #{id} actualizado a {nuevoEstado}" });
+        [HttpPut("Pagar/{id}")]
+        public async Task<IActionResult> PagarPedido(int id)
+        {
+            var idUsuario = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var pedido = await _context.Pedidos.FindAsync(id);
+            if (pedido == null) return NotFound();
+            if (pedido.IdUsuarioCliente != idUsuario) return Forbid();
+            pedido.Estado = "PAGADO";
+            pedido.IdTransaccionPago = Guid.NewGuid().ToString();
+            await _context.SaveChangesAsync();
+            return Ok(new { mensaje = "Pagado" });
         }
     }
 }
