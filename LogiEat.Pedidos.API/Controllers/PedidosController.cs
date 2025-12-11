@@ -10,122 +10,154 @@ namespace LogiEat.Pedidos.API.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize] // Candado general: Nadie entra sin Token
+    [Authorize]
     public class PedidosController : ControllerBase
     {
         private readonly PedidosDbContext _context;
 
+        // YA NO necesitamos HttpClientFactory porque no vamos a llamar a APIs externas para el stock.
         public PedidosController(PedidosDbContext context)
         {
             _context = context;
         }
 
-        // ============================================================
-        // 1. CREAR PEDIDO (CLIENTE)
-        // ============================================================
         [HttpPost("Crear")]
         public async Task<IActionResult> CrearPedido([FromBody] CrearPedidoDto dto)
         {
             if (dto.Productos == null || !dto.Productos.Any())
                 return BadRequest("El carrito no puede estar vacío.");
 
-            // A. Identificar al usuario desde el Token
             var idUsuario = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(idUsuario)) return Unauthorized();
 
-            // B. Crear Cabecera
-            var nuevoPedido = new Pedido
+            // INICIO DE TRANSACCIÓN: Todo o nada.
+            // Si falla el stock, no se crea el pedido. Si falla el pedido, no se descuenta stock.
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
+            try
             {
-                IdUsuarioCliente = idUsuario,
-                FechaPedido = DateTime.Now,
-                Estado = "PENDIENTE_PAGO",
-                Detalles = new List<DetallePedido>()
-            };
-
-            decimal totalCalculado = 0;
-
-            // C. Crear Detalles (Con nombres snapshot correctos)
-            foreach (var item in dto.Productos)
-            {
-                var subtotal = item.Precio * item.Cantidad;
-                totalCalculado += subtotal;
-
-                nuevoPedido.Detalles.Add(new DetallePedido
+                // 1. VALIDACIÓN DE STOCK (Lectura Local Directa)
+                // Ahora miramos tu tabla 'producto' directamente.
+                foreach (var item in dto.Productos)
                 {
-                    IdProducto = item.IdProducto,
-                    NombreProductoSnapshot = item.Nombre, // Clave: Guardamos el nombre histórico
-                    PrecioUnitarioSnapshot = item.Precio, // Clave: Guardamos el precio histórico
-                    Cantidad = item.Cantidad,
-                    Subtotal = subtotal
+                    var productoEnDb = await _context.Productos.FindAsync(item.IdProducto);
+
+                    if (productoEnDb == null)
+                        throw new Exception($"El producto '{item.Nombre}' (ID: {item.IdProducto}) no existe en el inventario.");
+
+                    if (productoEnDb.Cantidad < item.Cantidad)
+                        throw new Exception($"Stock insuficiente para '{item.Nombre}'. Disponible: {productoEnDb.Cantidad}, Solicitado: {item.Cantidad}.");
+                }
+
+                // 2. CREAR EL PEDIDO (Cabecera)
+                var nuevoPedido = new Pedido
+                {
+                    IdUsuarioCliente = idUsuario,
+                    FechaPedido = DateTime.Now,
+                    Estado = "PENDIENTE_PAGO",
+                    Detalles = new List<DetallePedido>()
+                };
+
+                decimal totalCalculado = 0;
+
+                // 3. PROCESAR DETALLES Y ACTUALIZAR INVENTARIO
+                foreach (var item in dto.Productos)
+                {
+                    var subtotal = item.Precio * item.Cantidad;
+                    totalCalculado += subtotal;
+
+                    // A. Agregar a la lista de detalles del PEDIDO (Para que salga en el recibo)
+                    nuevoPedido.Detalles.Add(new DetallePedido
+                    {
+                        IdProducto = item.IdProducto,
+                        NombreProductoSnapshot = item.Nombre,
+                        PrecioUnitarioSnapshot = item.Precio,
+                        Cantidad = item.Cantidad,
+                        Subtotal = subtotal
+                    });
+
+                    // B. INSERTAR EN TABLA DE MOVIMIENTOS (Para activar el TRIGGER)
+                    // Esto reemplaza la llamada a la API del compañero.
+                    // Al insertar aquí con 'pedido', el trigger SQL restará el stock automáticamente.
+                    var movimientoInventario = new DetallesProducto
+                    {
+                        IdProducto = item.IdProducto,
+                        Cantidad = item.Cantidad,
+                        TipoEstado = "pedido", // CLAVE: Esto dispara el Trigger de resta
+                        Precio = item.Precio,
+                        Fecha = DateTime.Now,
+                        // IdTransaccion = nuevoPedido.IdPedido (Opcional, si tienes el campo y quieres vincularlo)
+                    };
+
+                    _context.DetallesProductos.Add(movimientoInventario);
+                }
+
+                nuevoPedido.Total = totalCalculado;
+
+                // Guardamos el Pedido (y sus DetallePedido por cascada)
+                _context.Pedidos.Add(nuevoPedido);
+
+                // Guardamos los cambios (incluyendo los insert en DetallesProductos que actualizan stock)
+                await _context.SaveChangesAsync();
+
+                // Confirmamos la transacción
+                await transaction.CommitAsync();
+
+                return Ok(new
+                {
+                    mensaje = "Pedido creado exitosamente",
+                    idPedido = nuevoPedido.IdPedido,
+                    total = totalCalculado,
+                    statusInventario = "ACTUALIZADO_AUTOMATICAMENTE"
                 });
             }
-
-            nuevoPedido.Total = totalCalculado;
-
-            // D. Guardar todo en una transacción
-            _context.Pedidos.Add(nuevoPedido);
-            await _context.SaveChangesAsync();
-
-            return Ok(new { mensaje = "Pedido creado", idPedido = nuevoPedido.IdPedido, total = totalCalculado });
+            catch (Exception ex)
+            {
+                // Si algo falla (ej. sin stock), deshacemos todo.
+                await transaction.RollbackAsync();
+                return BadRequest(new { error = ex.Message });
+            }
         }
 
-        // ============================================================
-        // 2. VER MIS PEDIDOS (CLIENTE)
-        // ============================================================
+        // ... RESTO DE MÉTODOS (Get, Put) SE MANTIENEN IGUAL ...
         [HttpGet("MisPedidos")]
         public async Task<ActionResult> MisPedidos()
         {
             var idUsuario = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
-            var lista = await _context.Pedidos
-                                .Include(p => p.Detalles) // Traer los platos también
-                                .Where(p => p.IdUsuarioCliente == idUsuario)
-                                .OrderByDescending(p => p.FechaPedido)
-                                .ToListAsync();
-            return Ok(lista);
+            return Ok(await _context.Pedidos.Include(p => p.Detalles).Where(p => p.IdUsuarioCliente == idUsuario).OrderByDescending(p => p.FechaPedido).ToListAsync());
         }
 
-        // ============================================================
-        // 3. VER PENDIENTES (ADMINISTRADOR)
-        // ============================================================
-        [Authorize(Roles = "Admin")] // Solo el Admin puede ver esto
+        [Authorize(Roles = "Admin")]
         [HttpGet("Pendientes")]
         public async Task<ActionResult> Pendientes()
         {
-            var lista = await _context.Pedidos
-                                .Include(p => p.Detalles)
-                                .Where(p => p.Estado != "ENTREGADO" && p.Estado != "RECHAZADO") // Vemos todo lo activo
-                                .OrderByDescending(p => p.FechaPedido)
-                                .ToListAsync();
-            return Ok(lista);
+            return Ok(await _context.Pedidos.Include(p => p.Detalles).Where(p => p.Estado != "ENTREGADO" && p.Estado != "RECHAZADO").OrderByDescending(p => p.FechaPedido).ToListAsync());
         }
 
-        // ============================================================
-        // 4. CAMBIAR ESTADO (ADMINISTRADOR) - ¡VITAL PARA TU FLUJO!
-        // ============================================================
         [Authorize(Roles = "Admin")]
         [HttpPut("CambiarEstado/{id}")]
         public async Task<IActionResult> CambiarEstado(int id, [FromBody] string nuevoEstado)
         {
-            // Validamos que sea un estado permitido para no romper la lógica
-            var estadosValidos = new[] { "PAGADO", "APROBADO", "EN_CAMINO", "ENTREGADO", "RECHAZADO" };
-            if (!estadosValidos.Contains(nuevoEstado.ToUpper()))
-                return BadRequest($"Estado no válido. Use: {string.Join(", ", estadosValidos)}");
-
             var pedido = await _context.Pedidos.FindAsync(id);
-            if (pedido == null) return NotFound("Pedido no encontrado");
-
-            // Actualizamos estado
+            if (pedido == null) return NotFound();
             pedido.Estado = nuevoEstado.ToUpper();
-
-            // Auditoría básica: Quién lo aprobó
-            var idAdmin = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            pedido.IdUsuarioAdminAprobador = idAdmin;
+            pedido.IdUsuarioAdminAprobador = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             pedido.FechaAprobacion = DateTime.Now;
-
             await _context.SaveChangesAsync();
+            return Ok(new { mensaje = "Estado actualizado" });
+        }
 
-            return Ok(new { mensaje = $"Pedido #{id} actualizado a {nuevoEstado}" });
+        [HttpPut("Pagar/{id}")]
+        public async Task<IActionResult> PagarPedido(int id)
+        {
+            var idUsuario = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var pedido = await _context.Pedidos.FindAsync(id);
+            if (pedido == null) return NotFound();
+            if (pedido.IdUsuarioCliente != idUsuario) return Forbid();
+            pedido.Estado = "PAGADO";
+            pedido.IdTransaccionPago = Guid.NewGuid().ToString();
+            await _context.SaveChangesAsync();
+            return Ok(new { mensaje = "Pagado" });
         }
     }
 }

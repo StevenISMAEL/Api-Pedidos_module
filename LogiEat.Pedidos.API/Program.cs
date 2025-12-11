@@ -13,6 +13,10 @@ var builder = WebApplication.CreateBuilder(args);
 // 1. Base de Datos
 builder.Services.AddDbContext<PedidosDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+// --- �ESTA ES LA L�NEA QUE FALTABA! ---
+// Registra el servicio para que IHttpClientFactory funcione en el controlador
+builder.Services.AddHttpClient();
+// ---------------------------------------
 
 // 2. Configurar JWT (Validación)
 // Esta API no CREA tokens, solo los LEE.
