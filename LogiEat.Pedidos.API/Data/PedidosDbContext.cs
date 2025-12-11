@@ -45,38 +45,39 @@ namespace LogiEat.Pedidos.API.Data
                     // 1. Avisamos a EF Core que hay un Trigger (Esto arregla el error del OUTPUT)
                     table.HasTrigger("TR_ActualizarStock_Producto");
 
-            // ✅ Configuración personalizada de tablas
-            modelBuilder.Entity<Producto>(entity =>
-            {
-                entity.ToTable("producto");
-                entity.HasKey(p => p.IdProducto);
-                entity.Property(p => p.IdProducto)
-                      .ValueGeneratedOnAdd(); // ✅ Marca como Identity
-            });
+                    // ✅ Configuración personalizada de tablas
+                    modelBuilder.Entity<Producto>(entity =>
+                    {
+                        entity.ToTable("producto");
+                        entity.HasKey(p => p.IdProducto);
+                        entity.Property(p => p.IdProducto)
+                              .ValueGeneratedOnAdd(); // ✅ Marca como Identity
+                    });
 
-            modelBuilder.Entity<DetallesProducto>(entity =>
-            {
-                entity.ToTable("detalles_producto");
-                entity.HasKey(dp => dp.IdDetalle);
-                entity.Property(dp => dp.IdDetalle)
-                      .ValueGeneratedOnAdd(); // ✅ Marca como Identity
-            });
+                    modelBuilder.Entity<DetallesProducto>(entity =>
+                    {
+                        entity.ToTable("detalles_producto");
+                        entity.HasKey(dp => dp.IdDetalle);
+                        entity.Property(dp => dp.IdDetalle)
+                              .ValueGeneratedOnAdd(); // ✅ Marca como Identity
+                    });
 
-            modelBuilder.Entity<Empresa>(entity =>
-            {
-                entity.ToTable("empresa");
-                entity.HasKey(e => e.IdEmpresa);
-                entity.Property(e => e.IdEmpresa)
-                      .ValueGeneratedOnAdd(); // ✅ Marca como Identity
-            });
+                    modelBuilder.Entity<Empresa>(entity =>
+                    {
+                        entity.ToTable("empresa");
+                        entity.HasKey(e => e.IdEmpresa);
+                        entity.Property(e => e.IdEmpresa)
+                              .ValueGeneratedOnAdd(); // ✅ Marca como Identity
+                    });
 
 
-            // Relación 1-N: Producto -> DetallesProducto
-            modelBuilder.Entity<DetallesProducto>()
-                .HasOne(d => d.Producto)
-                .WithMany(p => p.DetallesProductos) // Asegúrate que la clase Producto tenga esta lista
-                .HasForeignKey(d => d.IdProducto)
-                .OnDelete(DeleteBehavior.Cascade);
+                    // Relación 1-N: Producto -> DetallesProducto
+                    modelBuilder.Entity<DetallesProducto>()
+                        .HasOne(d => d.Producto)
+                        .WithMany(p => p.DetallesProductos) // Asegúrate que la clase Producto tenga esta lista
+                        .HasForeignKey(d => d.IdProducto)
+                        .OnDelete(DeleteBehavior.Cascade);
+                });
         }
     }
 }
