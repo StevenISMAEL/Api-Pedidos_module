@@ -51,10 +51,31 @@ namespace LogiEat.Pedidos.API.Data
                 .WithMany(ep => ep.Pagos)
                 .HasForeignKey(p => p.EstadoPagoId);
 
-            // ✅ Tablas personalizadas
-            modelBuilder.Entity<Producto>().ToTable("producto");
-            modelBuilder.Entity<DetallesProducto>().ToTable("detalles_producto");
-            modelBuilder.Entity<Empresa>().ToTable("empresa");
+            // ✅ Configuración personalizada de tablas
+            modelBuilder.Entity<Producto>(entity =>
+            {
+                entity.ToTable("producto");
+                entity.HasKey(p => p.IdProducto);
+                entity.Property(p => p.IdProducto)
+                      .ValueGeneratedOnAdd(); // ✅ Marca como Identity
+            });
+
+            modelBuilder.Entity<DetallesProducto>(entity =>
+            {
+                entity.ToTable("detalles_producto");
+                entity.HasKey(dp => dp.IdDetalle);
+                entity.Property(dp => dp.IdDetalle)
+                      .ValueGeneratedOnAdd(); // ✅ Marca como Identity
+            });
+
+            modelBuilder.Entity<Empresa>(entity =>
+            {
+                entity.ToTable("empresa");
+                entity.HasKey(e => e.IdEmpresa);
+                entity.Property(e => e.IdEmpresa)
+                      .ValueGeneratedOnAdd(); // ✅ Marca como Identity
+            });
+
 
             // ✅ Relación 1-N: Producto -> DetallesProducto
             modelBuilder.Entity<DetallesProducto>()

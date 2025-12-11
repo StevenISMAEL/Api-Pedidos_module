@@ -29,7 +29,7 @@ namespace LogiEat.Pedidos.API.Services
                 throw new Exception($"EstadoPagoId {pago.EstadoPagoId} no existe.");
 
             // Validación HTTP de PedidoId
-            var pedidoResponse = await _httpClient.GetAsync($"https://localhost:7080/api/pedidos/{pago.PedidoId}");
+            var pedidoResponse = await _httpClient.GetAsync($"https://pedidos-api-logieat-hndadee6fcbda0d2.canadacentral-01.azurewebsites.net/api/pedidos/{pago.PedidoId}");
 
             if (!pedidoResponse.IsSuccessStatusCode)
                 throw new Exception($"PedidoId {pago.PedidoId} no existe en el microservicio de Pedidos.");
