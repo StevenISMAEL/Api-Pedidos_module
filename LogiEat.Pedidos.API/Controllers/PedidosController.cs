@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
-using System.Text.Json;
 
 namespace LogiEat.Pedidos.API.Controllers
 {
@@ -15,15 +14,11 @@ namespace LogiEat.Pedidos.API.Controllers
     public class PedidosController : ControllerBase
     {
         private readonly PedidosDbContext _context;
-        private readonly IHttpClientFactory _httpClientFactory;
 
-        // ⚠️ URL DEL POST DE TU COMPAÑERO (Ajustada a la ruta de Detalles)
-        private const string UrlApiPartnerPost = "https://app-inventario.azurewebsites.net/api/DetallesProducto";
-
-        public PedidosController(PedidosDbContext context, IHttpClientFactory httpClientFactory)
+        // YA NO necesitamos HttpClientFactory porque no vamos a llamar a APIs externas para el stock.
+        public PedidosController(PedidosDbContext context)
         {
             _context = context;
-            _httpClientFactory = httpClientFactory;
         }
 
         [HttpPost("Crear")]
@@ -35,100 +30,96 @@ namespace LogiEat.Pedidos.API.Controllers
             var idUsuario = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (string.IsNullOrEmpty(idUsuario)) return Unauthorized();
 
-            // 1. CREAR EL PEDIDO EN TU BASE DE DATOS
-            var nuevoPedido = new Pedido
+            // INICIO DE TRANSACCIÓN: Todo o nada.
+            // Si falla el stock, no se crea el pedido. Si falla el pedido, no se descuenta stock.
+            using var transaction = await _context.Database.BeginTransactionAsync();
+
+            try
             {
-                IdUsuarioCliente = idUsuario,
-                FechaPedido = DateTime.Now,
-                Estado = "PENDIENTE_PAGO",
-                Detalles = new List<DetallePedido>()
-            };
-
-            decimal totalCalculado = 0;
-
-            foreach (var item in dto.Productos)
-            {
-                var subtotal = item.Precio * item.Cantidad;
-                totalCalculado += subtotal;
-
-                nuevoPedido.Detalles.Add(new DetallePedido
+                // 1. VALIDACIÓN DE STOCK (Lectura Local Directa)
+                // Ahora miramos tu tabla 'producto' directamente.
+                foreach (var item in dto.Productos)
                 {
-                    IdProducto = item.IdProducto,
-                    NombreProductoSnapshot = item.Nombre,
-                    PrecioUnitarioSnapshot = item.Precio,
-                    Cantidad = item.Cantidad,
-                    Subtotal = subtotal
-                });
-            }
+                    var productoEnDb = await _context.Productos.FindAsync(item.IdProducto);
 
-            nuevoPedido.Total = totalCalculado;
+                    if (productoEnDb == null)
+                        throw new Exception($"El producto '{item.Nombre}' (ID: {item.IdProducto}) no existe en el inventario.");
 
-            _context.Pedidos.Add(nuevoPedido);
-            await _context.SaveChangesAsync(); // Se genera el ID del Pedido
+                    if (productoEnDb.Cantidad < item.Cantidad)
+                        throw new Exception($"Stock insuficiente para '{item.Nombre}'. Disponible: {productoEnDb.Cantidad}, Solicitado: {item.Cantidad}.");
+                }
 
-            // 2. ENVIAR REPORTE A LA API DEL COMPAÑERO (JSON LIMPIO)
-            var clienteHttp = _httpClientFactory.CreateClient();
-
-            // Lista para guardar errores y mostrártelos en Swagger
-            var erroresDeInventario = new List<string>();
-
-            foreach (var item in dto.Productos)
-            {
-                // AQUÍ ESTÁ EL TRUCO: Creamos un objeto anónimo SOLO con los campos planos.
-                // Ignoramos el objeto "producto" anidado que muestra Swagger.
-                var reporteVenta = new
+                // 2. CREAR EL PEDIDO (Cabecera)
+                var nuevoPedido = new Pedido
                 {
-                    idProducto = item.IdProducto,
-                    cantidad = item.Cantidad,
-                    precio = item.Precio,       // Él pide precio en su tabla
-
-                    // CORRECCIÓN: Cambiado de "SALIDA" a "pedido" según el error de tu compañero
-                    nombreProducto = item.Nombre,
-                    tipoEstado = "pedido",
-
-                    // Fechas (las ponemos nosotros por si su API no las genera sola)
-                    fechaIngreso = DateTime.Now,
-                    fechaEgreso = DateTime.Now,
-
-                    // (Opcional) Si él tiene un campo para referencia, úsalo. Si no, omítelo.
-                    // idTransaccion = nuevoPedido.IdPedido 
+                    IdUsuarioCliente = idUsuario,
+                    FechaPedido = DateTime.Now,
+                    Estado = "PENDIENTE_PAGO",
+                    Detalles = new List<DetallePedido>()
                 };
 
-                try
+                decimal totalCalculado = 0;
+
+                // 3. PROCESAR DETALLES Y ACTUALIZAR INVENTARIO
+                foreach (var item in dto.Productos)
                 {
-                    var jsonContent = JsonSerializer.Serialize(reporteVenta);
-                    var content = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+                    var subtotal = item.Precio * item.Cantidad;
+                    totalCalculado += subtotal;
 
-                    // Enviamos el POST
-                    var responsePost = await clienteHttp.PostAsync(UrlApiPartnerPost, content);
-
-                    if (!responsePost.IsSuccessStatusCode)
+                    // A. Agregar a la lista de detalles del PEDIDO (Para que salga en el recibo)
+                    nuevoPedido.Detalles.Add(new DetallePedido
                     {
-                        var errorMsg = await responsePost.Content.ReadAsStringAsync();
-                        // Guardamos el error para que tú lo veas
-                        erroresDeInventario.Add($"Error Prod {item.IdProducto}: {responsePost.StatusCode} - {errorMsg}");
-                        Console.WriteLine($"[WARNING] Falló reporte a inventario ({responsePost.StatusCode}): {errorMsg}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    erroresDeInventario.Add($"Excepción Prod {item.IdProducto}: {ex.Message}");
-                    Console.WriteLine($"[ERROR] No se pudo conectar con inventario: {ex.Message}");
-                }
-            }
+                        IdProducto = item.IdProducto,
+                        NombreProductoSnapshot = item.Nombre,
+                        PrecioUnitarioSnapshot = item.Precio,
+                        Cantidad = item.Cantidad,
+                        Subtotal = subtotal
+                    });
 
-            // Retornamos el resultado incluyendo los errores de inventario si hubo
-            return Ok(new
+                    // B. INSERTAR EN TABLA DE MOVIMIENTOS (Para activar el TRIGGER)
+                    // Esto reemplaza la llamada a la API del compañero.
+                    // Al insertar aquí con 'pedido', el trigger SQL restará el stock automáticamente.
+                    var movimientoInventario = new DetallesProducto
+                    {
+                        IdProducto = item.IdProducto,
+                        Cantidad = item.Cantidad,
+                        TipoEstado = "pedido", // CLAVE: Esto dispara el Trigger de resta
+                        Precio = item.Precio,
+                        Fecha = DateTime.Now,
+                        // IdTransaccion = nuevoPedido.IdPedido (Opcional, si tienes el campo y quieres vincularlo)
+                    };
+
+                    _context.DetallesProductos.Add(movimientoInventario);
+                }
+
+                nuevoPedido.Total = totalCalculado;
+
+                // Guardamos el Pedido (y sus DetallePedido por cascada)
+                _context.Pedidos.Add(nuevoPedido);
+
+                // Guardamos los cambios (incluyendo los insert en DetallesProductos que actualizan stock)
+                await _context.SaveChangesAsync();
+
+                // Confirmamos la transacción
+                await transaction.CommitAsync();
+
+                return Ok(new
+                {
+                    mensaje = "Pedido creado exitosamente",
+                    idPedido = nuevoPedido.IdPedido,
+                    total = totalCalculado,
+                    statusInventario = "ACTUALIZADO_AUTOMATICAMENTE"
+                });
+            }
+            catch (Exception ex)
             {
-                mensaje = "Pedido creado exitosamente",
-                idPedido = nuevoPedido.IdPedido,
-                total = totalCalculado,
-                statusInventario = erroresDeInventario.Any() ? "CON ERRORES" : "EXITOSO",
-                detallesErrorInventario = erroresDeInventario
-            });
+                // Si algo falla (ej. sin stock), deshacemos todo.
+                await transaction.RollbackAsync();
+                return BadRequest(new { error = ex.Message });
+            }
         }
 
-        // ... MÉTODOS GET Y PUT (Iguales que antes, no cambian) ...
+        // ... RESTO DE MÉTODOS (Get, Put) SE MANTIENEN IGUAL ...
         [HttpGet("MisPedidos")]
         public async Task<ActionResult> MisPedidos()
         {

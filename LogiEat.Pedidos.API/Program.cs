@@ -13,7 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 // 1. Base de Datos
 builder.Services.AddDbContext<PedidosDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-// --- ¡ESTA ES LA LÍNEA QUE FALTABA! ---
+// --- ï¿½ESTA ES LA Lï¿½NEA QUE FALTABA! ---
 // Registra el servicio para que IHttpClientFactory funcione en el controlador
 builder.Services.AddHttpClient();
 // ---------------------------------------
