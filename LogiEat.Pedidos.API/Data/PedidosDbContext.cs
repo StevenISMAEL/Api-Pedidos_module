@@ -18,6 +18,12 @@ namespace LogiEat.Pedidos.API.Data
         public DbSet<Pago> Pagos { get; set; }
         public DbSet<TipoPago> TiposPago { get; set; }
         public DbSet<EstadoPago> EstadosPago { get; set; }
+        // Inventario
+        public DbSet<Producto> Productos { get; set; }
+        public DbSet<DetallesProducto> DetallesProductos { get; set; }
+        public DbSet<Empresa> Empresas { get; set; }
+
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -44,6 +50,26 @@ namespace LogiEat.Pedidos.API.Data
                 .HasOne(p => p.EstadoPago)
                 .WithMany(ep => ep.Pagos)
                 .HasForeignKey(p => p.EstadoPagoId);
+
+            // ✅ Tablas personalizadas
+            modelBuilder.Entity<Producto>().ToTable("producto");
+            modelBuilder.Entity<DetallesProducto>().ToTable("detalles_producto");
+            modelBuilder.Entity<Empresa>().ToTable("empresa");
+
+            // ✅ Relación 1-N: Producto -> DetallesProducto
+            modelBuilder.Entity<DetallesProducto>()
+                .HasOne(d => d.Producto)
+                .WithMany(p => p.DetallesProductos)
+                .HasForeignKey(d => d.IdProducto)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // ✅ CHECK constraint opcional
+            modelBuilder.Entity<DetallesProducto>()
+                .ToTable(t => t.HasCheckConstraint(
+                    "CK_DetallesProducto_TipoEstado", 
+                    "tipo_estado IN ('pedido','compra')"));
+
+
 
             // 🌱 Seeding
             modelBuilder.ApplyConfiguration(new TipoPagoSeedConfiguration());

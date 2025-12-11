@@ -1,5 +1,4 @@
 ﻿namespace LogiEat.Pedidos.API.Models
-
 {
     public class EstadoPago
     {
