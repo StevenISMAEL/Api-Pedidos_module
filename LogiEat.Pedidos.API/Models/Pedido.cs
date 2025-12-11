@@ -8,7 +8,7 @@ namespace LogiEat.Pedidos.API.Models
     {
         [Key]
         public int IdPedido { get; set; }
-        public string IdUsuarioCliente { get; set; }
+        public string IdUsuarioCliente { get; set; } = string.Empty;
         public DateTime FechaPedido { get; set; } = DateTime.Now;
 
         [Column(TypeName = "decimal(10, 2)")]
@@ -21,6 +21,6 @@ namespace LogiEat.Pedidos.API.Models
         public DateTime? FechaAprobacion { get; set; }
         public string? IdTransaccionPago { get; set; }
 
-        public List<DetallePedido> Detalles { get; set; }
+        public List<DetallePedido> Detalles { get; set; } = new();
     }
 }

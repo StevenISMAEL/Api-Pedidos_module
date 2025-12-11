@@ -15,7 +15,7 @@ namespace LogiEat.Pedidos.API.Models
 
         // --- CORRECCIÓN 1: Usar los nombres EXACTOS de la BD ---
         // Antes tenías "NombreProducto", ahora debe ser "NombreProductoSnapshot"
-        public string NombreProductoSnapshot { get; set; }
+        public string? NombreProductoSnapshot { get; set; }
 
         [Column(TypeName = "decimal(10, 2)")]
         public decimal PrecioUnitarioSnapshot { get; set; }
